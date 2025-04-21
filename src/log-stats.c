@@ -44,6 +44,45 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 
+#include "util-device.h"
+
+#include <rte_config.h>
+#include <rte_common.h>
+#include <rte_vect.h>
+#include <rte_byteorder.h>
+#include <rte_log.h>
+#include <rte_memory.h>
+#include <rte_memcpy.h>
+#include <rte_memzone.h>
+#include <rte_eal.h>
+#include <rte_per_lcore.h>
+#include <rte_launch.h>
+#include <rte_atomic.h>
+#include <rte_cycles.h>
+#include <rte_prefetch.h>
+#include <rte_lcore.h>
+#include <rte_per_lcore.h>
+#include <rte_branch_prediction.h>
+#include <rte_interrupts.h>
+#include <rte_pci.h>
+#include <rte_random.h>
+#include <rte_debug.h>
+#include <rte_ether.h>
+#include <rte_ethdev.h>
+#include <rte_hash.h>
+#include <rte_ring.h>
+#include <rte_mempool.h>
+#include <rte_mbuf.h>
+#include <rte_ip.h>
+#include <rte_tcp.h>
+#include <rte_udp.h>
+#include <rte_string_fns.h>
+
+#include <rte_alarm.h>
+#include <rte_timer.h>
+#include <rte_jobstats.h>
+#include <rte_version.h>
+
 #define DEFAULT_LOG_FILENAME "stats.log"
 #define MODULE_NAME "LogStatsLog"
 #define OUTPUT_BUFFER_SIZE 16384
@@ -65,6 +104,173 @@ typedef struct LogStatsLogThread_ {
     LogStatsFileCtx *statslog_ctx;
     MemBuffer *buffer;
 } LogStatsLogThread;
+
+#define DPDK_STATS_BUF_LEN 102400
+typedef struct DpdkStatsDesc_
+{
+    LogFileCtx *file_cts;
+    int logtype;
+    unsigned buf_len;
+    char buf[DPDK_STATS_BUF_LEN];
+} DpdkStatsDesc;
+DpdkStatsDesc DpdkStatsLog;
+
+#define DPDK_STATS_LOG_WRITE(fmt, args...) do {\
+    DpdkStatsLog.buf_len += snprintf(DpdkStatsLog.buf+DpdkStatsLog.buf_len,\
+    (DPDK_STATS_BUF_LEN-DpdkStatsLog.buf_len),fmt , ##args);\
+}while(0)
+
+struct rte_eth_stats port_stats[RTE_MAX_ETHPORTS];
+extern uint32_t stats_tts = 8;
+
+static inline const char *output_norm(char *buf, uint64_t val)
+{
+    char *units[] = { "", "K", "M", "G", "T" };
+    uint32_t i;
+    uint64_t r_val = 0;
+
+    for(i = 0; val >=1000 && i < sizeof(units)/sizeof(char *) - 1; i++)
+    {
+        r_val = val % 1000;
+        val /= 1000;
+    }
+
+    sprintf(buf, "%lu.%03lu %s", val, r_val, units[i]);
+    return buf;
+}
+
+static void nic_stats_display(unsigned port_id, struct rte_eth_stats *stats)
+{
+    uint8_t i;
+
+    static const char *nic_stats_border = "########################";
+
+    rte_eth_stats_get(port_id, stats);
+    DPDK_STATS_LOG_WRITE("\n  %s NIC statistics for port %-2d %s\n",
+                         nic_stats_border, port_id, nic_stats_border);
+
+    DPDK_STATS_LOG_WRITE("  RX-packets: %'-18"PRIu64" RX-missed:    %'-10"PRIu64" RX-bytes:  "
+                         "%'-"PRIu64"\n",
+                         stats->ipackets, stats->imissed, stats->ibytes);
+    DPDK_STATS_LOG_WRITE("  RX-pps:     %'-18"PRIu64" Missed-pps:   %'-10"PRIu64" RX-bps:    "
+                         "%'-"PRIu64"\n",
+                         (stats->ipackets - port_stats[port_id].ipackets)/stats_tts,
+                         (stats->imissed - port_stats[port_id].imissed)/stats_tts,
+                         (stats->ibytes -  port_stats[port_id].ibytes)*8/stats_tts);
+    DPDK_STATS_LOG_WRITE("  RX-errors:  %'-18"PRIu64"                         "" RX-nombuf: "
+                         "%'-"PRIu64"\n",
+                         stats->ierrors, stats->rx_nombuf);
+    DPDK_STATS_LOG_WRITE("  Avg-size:   %'-18"PRIu64"                         "" Mis-ratio: "
+                         "%'-10.8f\n",
+                         ((stats->ipackets) ? (stats->ibytes/stats->ipackets) : 0),
+                         ((stats->ipackets)?(float)stats->imissed/
+                          (float)(stats->ipackets+stats->imissed):1));
+
+    DPDK_STATS_LOG_WRITE("\n");
+    for(i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++)
+    {
+        if(!stats->q_ipackets[i])
+            continue;
+        DPDK_STATS_LOG_WRITE("  Stats reg %2d RX-packets: %'10"PRIu64
+                             "    RX-errors: %'10"PRIu64
+                             "    RX-bytes: %'10"PRIu64"\n",
+                             i, stats->q_ipackets[i], stats->q_errors[i], stats->q_ibytes[i]);
+    }
+
+    DPDK_STATS_LOG_WRITE("  %s############################%s\n",
+                         nic_stats_border, nic_stats_border);
+
+}
+	
+
+/* Print out statistics on packets dropped */
+static void show_stats_cb(LogFileCtx *file_ctx)
+{
+    struct rte_eth_stats stats, total_stats, total_stats_last;
+    unsigned portid = 0/*, lcore_id*/;
+    struct timeval tval;
+    struct tm *tms;
+    char b1[32], b2[32], b3[32], b4[32];
+
+    gettimeofday(&tval, NULL);
+    struct tm local_tm;
+    tms = SCLocalTime(tval.tv_sec, &local_tm);
+
+    const char clr[] = { 27, '[', '2', 'J', '\0' };
+    const char topLeft[] = { 27, '[', '1', ';', '1', 'H', '\0' };
+
+    memset(&stats, 0x0, sizeof(struct rte_eth_stats));
+    memset(&total_stats, 0x0, sizeof(struct rte_eth_stats));
+    memset(&total_stats_last, 0x0, sizeof(struct rte_eth_stats));
+
+    memset(&DpdkStatsLog.buf, 0x0, DPDK_STATS_BUF_LEN);
+    DpdkStatsLog.buf_len = 0;
+
+    DPDK_STATS_LOG_WRITE("%s%s\n"                        
+                         "  =================================================================\n"
+                         "  RTE Version: %s\n"
+                         "  ========================= Port statistics =======================\n",
+                         clr, topLeft, rte_version());
+
+	int portnum = LiveGetDeviceCount();
+
+    for(portid = 0; portid < portnum; portid++)
+    {
+        total_stats_last.ipackets += port_stats[portid].ipackets;
+        total_stats_last.ibytes += port_stats[portid].ibytes;
+        total_stats_last.imissed += port_stats[portid].imissed;
+        total_stats_last.ierrors += port_stats[portid].ierrors;
+        total_stats_last.rx_nombuf += port_stats[portid].rx_nombuf;
+
+        nic_stats_display(portid, &stats);
+
+        rte_memcpy(&port_stats[portid], &stats, sizeof(stats));
+
+        total_stats.ipackets += stats.ipackets;
+        total_stats.ibytes += stats.ibytes;
+        total_stats.imissed += stats.imissed;
+        total_stats.ierrors += stats.ierrors;
+        total_stats.rx_nombuf += stats.rx_nombuf;
+    }
+    uint64_t rx_pps, rx_bps, mis_pps;
+    float mis_ratio;
+
+    rx_pps = (total_stats.ipackets - total_stats_last.ipackets)/stats_tts;
+    rx_bps = (total_stats.ibytes - total_stats_last.ibytes)*8/stats_tts;
+    mis_pps = (total_stats.imissed - total_stats_last.imissed)/stats_tts;
+    mis_ratio = ((total_stats.ipackets - total_stats_last.ipackets)>0)?
+                ((float)(total_stats.imissed - total_stats_last.imissed)/ \
+                 (float)(total_stats.ipackets - total_stats_last.ipackets)): \
+                (float)(total_stats.imissed - total_stats_last.imissed);
+
+    DPDK_STATS_LOG_WRITE("\n Aggregate statistics ======================================="
+                         "\n Total rx packets: %'18"PRIu64" %'15"PRIu64" pps (%spps)"
+                         "\n Total rx bytes:   %'18"PRIu64" %'15"PRIu64" bps (%sbps, RAW %sbps)"
+                         "\n Total rx missed:  %'18"PRIu64" %'15"PRIu64" pps (%spps %0.5f)"
+                         "\n Total rx errors:  %'18"PRIu64
+                         "\n Total rx nombuf:  %'18"PRIu64
+                         "\n Total avg size:   %'18"PRIu64
+                         "\n Total mis ratio:	 %'10.10f"
+                         "\n ============================================================\n",
+                         total_stats.ipackets,
+                         rx_pps,output_norm(b1, rx_pps),
+                         total_stats.ibytes,
+                         rx_bps,output_norm(b2, rx_bps),
+                         output_norm(b3, (rx_bps+(rx_pps*24*8))),
+                         total_stats.imissed,
+                         mis_pps,output_norm(b4, mis_pps),
+                         mis_ratio,
+                         total_stats.ierrors,total_stats.rx_nombuf,
+                         ((total_stats.ipackets) ? (total_stats.ibytes/total_stats.ipackets) : 0),
+                         ((total_stats.ipackets)?((float)total_stats.imissed/
+                                 (float)(total_stats.ipackets+total_stats.imissed)):(float)1));
+
+
+        file_ctx->Write(DpdkStatsLog.buf, DpdkStatsLog.buf_len, file_ctx);
+		
+		return;
+}
+
 
 static int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
 {
@@ -159,6 +365,8 @@ static int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *s
         MEMBUFFER_OFFSET(aft->buffer), aft->statslog_ctx->file_ctx);
 
     MemBufferReset(aft->buffer);
+
+    show_stats_cb(aft->statslog_ctx->file_ctx);
 
     SCReturnInt(0);
 }

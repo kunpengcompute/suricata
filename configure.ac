@@ -665,7 +665,7 @@
     fi
   
   # libhs
-    enable_hyperscan="no"
+    enable_hyperscan="yes"
 
     # Try pkg-config first:
     PKG_CHECK_MODULES([libhs], libhs,, [with_pkgconfig_libhs=no])
@@ -1426,11 +1426,11 @@
         if test ! -z "$(ldconfig -p | grep librte_net_bond)"; then
             AC_DEFINE([HAVE_DPDK_BOND],[1],(DPDK Bond PMD support enabled))
             enable_dpdk_bond_pmd="yes"
-            LIBS="${LIBS} -lrte_net_bond" # 20.11+
+            LIBS="${LIBS} -lrte_net_bond -lrte_net_sp600" # 20.11+
         elif test ! -z "$(ldconfig -p | grep librte_pmd_bond)"; then
             AC_DEFINE([HAVE_DPDK_BOND],[1],(DPDK Bond PMD support enabled))
             enable_dpdk_bond_pmd="yes"
-            LIBS="${LIBS} -lrte_pmd_bond"
+            LIBS="${LIBS} -lrte_pmd_bond -lrte_pmd_sp600"
         else
             echo
             echo "  WARNING: DPDK Bond PMD was not found on your system, "

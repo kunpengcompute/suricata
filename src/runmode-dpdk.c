@@ -128,6 +128,9 @@ static void DPDKDerefConfig(void *conf);
 #define DPDK_CONFIG_DEFAULT_COPY_MODE                   "none"
 #define DPDK_CONFIG_DEFAULT_COPY_INTERFACE              "none"
 
+#define DPDK_MEMPOOL_MAX_CNTS 128
+#define DPDK_MEMPOOL_LEN 64
+
 DPDKIfaceConfigAttributes dpdk_yaml = {
     .threads = "threads",
     .irq_mode = "interrupt-mode",
@@ -1202,6 +1205,9 @@ static void DeviceInitPortConf(const DPDKIfaceConfig *iconf,
     }
 }
 
+
+struct rte_mempool *g_pkt_mempool[DPDK_MEMPOOL_MAX_CNTS] = {0};
+ 
 static int DeviceConfigureQueues(DPDKIfaceConfig *iconf, const struct rte_eth_dev_info *dev_info,
         const struct rte_eth_conf *port_conf)
 {
@@ -1212,21 +1218,10 @@ static int DeviceConfigureQueues(DPDKIfaceConfig *iconf, const struct rte_eth_de
     struct rte_eth_rxconf rxq_conf;
     struct rte_eth_txconf txq_conf;
 
-    char mempool_name[64];
-    snprintf(mempool_name, 64, "mempool_%.20s", iconf->iface);
-    // +4 for VLAN header
-    mtu_size = iconf->mtu + RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN + 4;
-    mbuf_size = ROUNDUP(mtu_size, 1024) + RTE_PKTMBUF_HEADROOM;
-    SCLogConfig("%s: creating packet mbuf pool %s of size %d, cache size %d, mbuf size %d",
-            iconf->iface, mempool_name, iconf->mempool_size, iconf->mempool_cache_size, mbuf_size);
-
-    iconf->pkt_mempool = rte_pktmbuf_pool_create(mempool_name, iconf->mempool_size,
-            iconf->mempool_cache_size, 0, mbuf_size, (int)iconf->socket_id);
-    if (iconf->pkt_mempool == NULL) {
-        retval = -rte_errno;
-        SCLogError("%s: rte_pktmbuf_pool_create failed with code %d (mempool: %s) - %s",
-                iconf->iface, rte_errno, mempool_name, rte_strerror(rte_errno));
-        SCReturnInt(retval);
+    if (iconf->nb_rx_queues > DPDK_MEMPOOL_MAX_CNTS) {
+        SCLogError("%s: The number of the threads bound to the device exceeds the maximum value %d. Check whether the configuration is correct modify the code to change the maximum value.",
+                        iconf->iface, DPDK_MEMPOOL_MAX_CNTS);
+        SCReturnInt(-EINVAL);
     }
 
     for (uint16_t queue_id = 0; queue_id < iconf->nb_rx_queues; queue_id++) {
@@ -1243,8 +1238,26 @@ static int DeviceConfigureQueues(DPDKIfaceConfig *iconf, const struct rte_eth_de
                 rxq_conf.rx_thresh.hthresh, rxq_conf.rx_thresh.pthresh, rxq_conf.rx_thresh.wthresh,
                 rxq_conf.rx_free_thresh, rxq_conf.rx_drop_en, rxq_conf.offloads);
 
+                char mempool_name[DPDK_MEMPOOL_LEN];
+                snprintf(mempool_name, DPDK_MEMPOOL_LEN, "mempool_%.20s.%d", iconf->iface, queue_id);
+                // +4 for VLAN header
+                mtu_size = iconf->mtu + RTE_ETHER_CRC_LEN + RTE_ETHER_HDR_LEN + 4;
+                mbuf_size = ROUNDUP(mtu_size, 1024) + RTE_PKTMBUF_HEADROOM;
+                SCLogConfig("%s: creating packet mbuf pool %s of size %d, cache size %d, mbuf size %d",
+                                iconf->iface, mempool_name, iconf->mempool_size, iconf->mempool_cache_size, mbuf_size);
+                
+                g_pkt_mempool[queue_id] = rte_pktmbuf_pool_create(mempool_name, iconf->mempool_size,
+                                iconf->mempool_cache_size, 0, mbuf_size, (int)iconf->socket_id);
+                iconf->pkt_mempool = g_pkt_mempool[queue_id];               
+                if (iconf->pkt_mempool == NULL) {
+                        retval = -rte_errno;
+                        SCLogError("%s: rte_pktmbuf_pool_create failed with code %d (mempool: %s) - %s",
+                                        iconf->iface, rte_errno, mempool_name, rte_strerror(rte_errno));
+                        SCReturnInt(retval);
+                }
+
         retval = rte_eth_rx_queue_setup(iconf->port_id, queue_id, iconf->nb_rx_desc,
-                iconf->socket_id, &rxq_conf, iconf->pkt_mempool);
+                iconf->socket_id, &rxq_conf, g_pkt_mempool[queue_id]);
         if (retval < 0) {
             rte_mempool_free(iconf->pkt_mempool);
             SCLogError(

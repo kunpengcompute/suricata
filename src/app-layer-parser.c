@@ -1402,45 +1402,47 @@ int AppLayerParserParse(ThreadVars *tv, AppLayerParserThreadCtx *alp_tctx, Flow 
             goto error;
         }
 #endif
-        /* invoke the parser */
-        AppLayerResult res = p->Parser[direction](f, alstate, pstate, stream_slice,
-                alp_tctx->alproto_local_storage[f->protomap][alproto]);
-        if (res.status < 0) {
-            AppLayerIncParserErrorCounter(tv, f);
-            goto error;
-        } else if (res.status > 0) {
-            DEBUG_VALIDATE_BUG_ON(res.consumed > input_len);
-            DEBUG_VALIDATE_BUG_ON(res.needed + res.consumed < input_len);
-            DEBUG_VALIDATE_BUG_ON(res.needed == 0);
-            /* incomplete is only supported for TCP */
-            DEBUG_VALIDATE_BUG_ON(f->proto != IPPROTO_TCP);
-
-            /* put protocol in error state on improper use of the
-             * return codes. */
-            if (res.consumed > input_len || res.needed + res.consumed < input_len) {
-                AppLayerIncInternalErrorCounter(tv, f);
+        if (input_len > 0 && input) {
+            /* invoke the parser */
+            AppLayerResult res = p->Parser[direction](f, alstate, pstate, stream_slice,
+                    alp_tctx->alproto_local_storage[f->protomap][alproto]);
+            if (res.status < 0) {
+                AppLayerIncParserErrorCounter(tv, f);
                 goto error;
-            }
+            } else if (res.status > 0) {
+                DEBUG_VALIDATE_BUG_ON(res.consumed > input_len);
+                DEBUG_VALIDATE_BUG_ON(res.needed + res.consumed < input_len);
+                DEBUG_VALIDATE_BUG_ON(res.needed == 0);
+                /* incomplete is only supported for TCP */
+                DEBUG_VALIDATE_BUG_ON(f->proto != IPPROTO_TCP);
 
-            if (f->proto == IPPROTO_TCP && f->protoctx != NULL) {
-                TcpSession *ssn = f->protoctx;
-                SCLogDebug("direction %d/%s", direction,
-                        (flags & STREAM_TOSERVER) ? "toserver" : "toclient");
-                if (direction == 0) {
-                    /* parser told us how much data it needs on top of what it
-                     * consumed. So we need tell stream engine how much we need
-                     * before the next call */
-                    ssn->client.data_required = res.needed;
-                    SCLogDebug("setting data_required %u", ssn->client.data_required);
-                } else {
-                    /* parser told us how much data it needs on top of what it
-                     * consumed. So we need tell stream engine how much we need
-                     * before the next call */
-                    ssn->server.data_required = res.needed;
-                    SCLogDebug("setting data_required %u", ssn->server.data_required);
+                /* put protocol in error state on improper use of the
+                * return codes. */
+                if (res.consumed > input_len || res.needed + res.consumed < input_len) {
+                    AppLayerIncInternalErrorCounter(tv, f);
+                    goto error;
                 }
+
+                if (f->proto == IPPROTO_TCP && f->protoctx != NULL) {
+                    TcpSession *ssn = f->protoctx;
+                    SCLogDebug("direction %d/%s", direction,
+                            (flags & STREAM_TOSERVER) ? "toserver" : "toclient");
+                    if (direction == 0) {
+                        /* parser told us how much data it needs on top of what it
+                        * consumed. So we need tell stream engine how much we need
+                        * before the next call */
+                        ssn->client.data_required = res.needed;
+                        SCLogDebug("setting data_required %u", ssn->client.data_required);
+                    } else {
+                        /* parser told us how much data it needs on top of what it
+                        * consumed. So we need tell stream engine how much we need
+                        * before the next call */
+                        ssn->server.data_required = res.needed;
+                        SCLogDebug("setting data_required %u", ssn->server.data_required);
+                    }
+                }
+                consumed = res.consumed;
             }
-            consumed = res.consumed;
         }
     }
 

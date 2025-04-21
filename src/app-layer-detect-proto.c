@@ -1428,6 +1428,10 @@ AppProto AppLayerProtoDetectGetProto(AppLayerProtoDetectThreadCtx *tctx, Flow *f
     AppProto alproto = ALPROTO_UNKNOWN;
     AppProto pm_alproto = ALPROTO_UNKNOWN;
 
+    if (buf == NULL || buflen == 0) {
+        goto end;
+    }
+    
     if (!FLOW_IS_PM_DONE(f, flags)) {
         AppProto pm_results[ALPROTO_MAX];
         uint16_t pm_matches = AppLayerProtoDetectPMGetProto(
