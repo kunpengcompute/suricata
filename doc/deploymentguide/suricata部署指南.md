@@ -75,7 +75,7 @@
 </tr>
 <tr id="row47758239262"><th class="firstcol" valign="top" width="50%" id="mcps1.2.3.6.1"><p id="p0775112318268"><a name="p0775112318268"></a><a name="p0775112318268"></a>网卡</p>
 </th>
-<td class="cellrowborder" valign="top" width="50%" headers="mcps1.2.3.6.1 "><p id="p1677512332616"><a name="p1677512332616"></a><a name="p1677512332616"></a>4*25GE SP680 * 3</p>
+<td class="cellrowborder" valign="top" width="50%" headers="mcps1.2.3.6.1 "><p id="p1677512332616"><a name="p1677512332616"></a><a name="p1677512332616"></a>4*25GE SP680 * 2 + 2*25GE CX5 * 2</p>
 </td>
 </tr>
 </tbody>
@@ -111,7 +111,7 @@
 </tr>
 <tr id="row765453115315"><th class="firstcol" valign="top" width="49.95%" id="mcps1.2.3.6.1"><p id="p765453123114"><a name="p765453123114"></a><a name="p765453123114"></a>网卡</p>
 </th>
-<td class="cellrowborder" valign="top" width="50.05%" headers="mcps1.2.3.6.1 "><p id="p198216713416"><a name="p198216713416"></a><a name="p198216713416"></a>4*25GE SP680 * 2 + 2*25GE CX5 * 2</p>
+<td class="cellrowborder" valign="top" width="50.05%" headers="mcps1.2.3.6.1 "><p id="p198216713416"><a name="p198216713416"></a><a name="p198216713416"></a>4*25GE SP680 * 3</p>
 </td>
 </tr>
 </tbody>
@@ -244,10 +244,6 @@
         wget https://gitee.com/kunpengcompute/hyperscan/archive/refs/tags/v5.4.2.aarch64.tar.gz --no-check-certificate
         tar -zxf hyperscan-v5.4.2.aarch64.tar.gz
         ```
-
-        >![](public_sys-resources/icon-note.gif) **说明：** 
-        >若出现如下报错建议将源码包下载到本地传入服务器再解压。
-        >![](figures/zh-cn_image_0000002288654889.png)
 
     2.  添加Boost头文件，其中_\{boost\_path\}_需替换为绝对路径。
 
@@ -450,7 +446,7 @@ Suricata借助DPDK进行网络流量收包，需提前安装，本章节主要�
 2.  安装KSL。
 
     ```
-    rpm -ivh boostkit-ksl-2.5.0-1.aarch64.rpm
+    rpm -ivh boostkit-ksl-2.5.1-1.aarch64.rpm
     source /etc/profile
     ```
 
