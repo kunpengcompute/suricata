@@ -9,7 +9,6 @@
 *.rules
 *.pcap
 *.pcapng
-/*.yaml
 Makefile
 .deps/
 .libs/
